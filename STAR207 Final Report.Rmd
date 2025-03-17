@@ -1,0 +1,823 @@
+---
+title: "STA207 Final Report"
+author: "Zecheng Li"
+date: "2025-03-11"
+output: 
+    html_document:
+      toc: true
+      toc_depth: 3
+      toc_float: true  
+---
+
+```{r, echo=FALSE}
+suppressWarnings(suppressPackageStartupMessages({
+  library(lattice)
+  library(haven)
+  library(lme4)
+  library(tidyr)
+  library(car)
+  library(ggplot2)
+  library(dplyr)
+  library(nortest)
+  library(moments)
+  library(gplots)
+  library(emmeans)
+  library(rgl)
+  library(lmtest)
+  library(patchwork)
+  library(cobalt)
+  library(hdm)
+  library(sandwich)
+  library(keras3)
+  library(tensorflow)
+  library(MatchIt)
+  library(pROC)
+  library(forcats)
+  library(glmnet)
+  library(caret)
+}))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Read DataSet
+suppressWarnings(suppressMessages({
+  sink(tempfile())
+  data <- read_sav("/Users/lizc/Desktop/25 Winter/STA 207/Final Project/dataverse_files/PROJECT STAR/STAR_Students.sav")
+  sink()
+}))
+```
+
+```{r, echo = FALSE}
+data_cleaned <- data %>% drop_na(g1tmathss, g1classtype, g1schid)
+
+# group students' math score by teacher's ID and compute the mean score:
+data_grouped <- data_cleaned %>%
+  group_by(g1tchid) %>%
+  summarise(mean_score=mean(g1tmathss), .groups="drop")
+
+data_analysis <- data_cleaned %>%
+  left_join(data_grouped, by = "g1tchid")
+```
+
+```{r, echo=FALSE}
+# collect the switching/staying information:
+data_collected <- data_analysis[!is.na(data_analysis$gkclasstype) & !is.na(data_analysis$gktmathss) & !is.na(data_analysis$g1classtype), ]
+data_switcher <- data_collected %>%
+  mutate(switcher = case_when(
+    gkclasstype == 2 & g1classtype == 1~"regular_small",
+    gkclasstype == 3 & g1classtype == 1~"regular+aide_small",
+    gkclasstype == 1 & g1classtype == 1~"stay_small",
+    gkclasstype == 2 & g1classtype == 2~"stay_regular",
+    gkclasstype == 3 & g1classtype == 3~"stay_regular+aide",
+    gkclasstype == 3 & g1classtype == 2~"regular_regular+aide",
+    gkclasstype == 2 & g1classtype == 3~"regular+aide_regular",
+    gkclasstype == 1 & g1classtype == 2~"small_regular",
+    gkclasstype == 1 & g1classtype == 3~"small_regular+aide",
+    TRUE~"Other"
+  ))
+```
+
+# Abstract
+
+This study focused on investigating the effect of reduced class size on the mean math score of first-grade students based on Project STAR (Student/Teacher Achievement Ratio), which was launched in 1985. We began by analyzing the experimental design and identifying flaws in the initial analysis report. Then, a mixed-effects model was built based on these findings to examine the effect of reduced class size on first-grade students' math scores. Potential selection bias caused by reassignments, which may have affected the estimation of the causal effect, was also detected. To address this, we applied Propensity Score Matching using two methods for propensity score estimation to reduce the impact of selection bias. After accounting for selection bias, a significant positive effect of reduced class size was revealed. We concluded that students enrolled in small classes had, on average, the highest math scores, which may be useful for policymakers in related fields.
+
+
+# Background of Project STAR
+
+In 1985, the Tennessee Legislature authorized and funded a longitude study on effects of class size on the student achievements in the primary grades. The experiments lasted for four years, from 1985 to 1989, following 11601 students in Tennessee for at least one year from kindergarten to third and recorded and investigated student achievement with annual achievement test and non-achievement measures.Researchers continued to collected the student achievement data through high school after the ending of experiment in 1989. 
+
+The experiment was designed mainly to study 3 major problems: 
+
+ - What are the effect of small class on the public primary school students' achievement and development ?
+
+ - Does there exist a cumulative effect of reduced class size for students stayed in a small class for at least 4 years, compared with students enrolled in small classed for only one year?
+
+ - Does a training program boost students' achievement by helping teacher make full use of reduced class size effect?
+
+In the 1980s, there was intense debate about the effect of class size on students' academic achievements. Some researchers claimed that reducing class size would enhance students' performance. However, implementing class size reductions across all areas of Tennessee required a substantial budget. Due to the lack of high-quality empirical research, these claims did not receive much support. As a result, policymakers faced a dilemma: they aimed to improve education quality by reducing class sizes but risked wasting money if there was no clear benefit.
+
+To address this, the Tennessee state government decided to conduct a detailed experiment to examine the effect of reduced class sizes and provide scientific support for a statewide policy on budget allocation for class size reduction. In this experiment, students and teachers were randomly assigned to different types of classes as part of a randomized controlled trial. Students' achievements were measured annually using the Stanford Achievement Tests, along with multidimensional data (e.g., teacher experience, eligibility for free lunch). After the experiment concluded in 1989, all students returned to full-sized classes, but relevant data continued to be collected and recorded through high school.
+
+In our study, we mainly focused on the following 2 questions:
+
+ - Does there exist significant difference between math scaled scores in first grade across class types?
+ 
+ - Which class type is associated with the highest average math scaled score in first grade?
+
+# Experiment Design
+
+To solve the previous problems, researcher focused on the earliest grades in the primary schools (K-3), where the effect of reduced class size are expected to occur with maximum likelihood. Unless required by the experiment design, there were no major changes in the school. Students and teachers participated in this project were assigned randomly to different types of classes. Teachers were required to be certified. The legislation also required schools participated in this project should come from "Inner city, suburban, urban and rural" areas and the partition of different levels of urbanicity is specified by the consortium. The partition of different class conditions were also specified, ('small class')(S): **13-17** students, ('regular class')(R): **22-25** students, and ('regular class with aide')(RA): **22-25** students with a **full-time teacher aide**.
+
+Schools were required to meet specific requirements to be eligible to participate this project. Each school needed to have enough kindergarten students; at least one class of each type should be provided, therefore, a minimum of 57 students should be met. Researchers invited all schools in the Tennessee school systems to participate in this study. 180 schools from about 50 districts were interested, **79** schools from 42 districts were selected after confirmed meeting the requirement and to span the State of Tennessee geographically. To summary, 17 inner-city, 16 suburban, 8 urban and 38 rural schools were selected finally in 1985 and there was a slight reduction on the numbers due to unexpected issues. (e.g. Merged with another school, Withdrawal from the project, etc.)
+
+Students participated in this project was assigned randomly to one of the three class types when they entered kindergarten (or in first grade, since kindergarten was not mandated in Tennessee). The randomization was conducted by consortium and monitor by university students at school level. Non-existence of systematic bias was confirmed by comparing on gender, race, free-lunch composition, etc. Once assigned, students are required to remain in the same type of classes during their participation in the project. As a result, 128 small classes, 101 regular classes and 99 regular classes with aide were included.
+
+```{r,echo=FALSE}
+col_name_schools <- c("INNER CITY", "SUBURBAN", "URBAN", "RURAL")
+num_schools <- c(17, 16, 8, 38)
+
+col_name_class <- c("S", "R", "RA")
+num_classes <- c(128, 101, 99)
+
+data_urbanicity <- data.frame(col_name_schools, num_schools)
+data_class <- data.frame(col_name_class, num_classes)
+
+urbanicity_proportion = data_urbanicity$num_schools / sum(data_urbanicity$num_schools)
+data_urbanicity <- data_urbanicity %>% 
+  mutate(percentage = round((num_schools / sum(num_schools)) * 100, 1),
+         label = paste0(col_name_schools, " (", percentage, "%)")) 
+
+class_proportion = data_class$num_classes / sum(data_class$num_classes)
+data_class <- data_class %>% 
+  mutate(percentage = round((num_classes / sum(num_classes)) * 100, 1),
+         label = paste0(col_name_class, " (", percentage, "%)")) 
+
+pie_urbanicity <- ggplot(data = data_urbanicity, aes(x = "", y = num_schools, fill = label)) + geom_col(width = 1, color = "white") + coord_polar(theta = "y") + theme_void() + labs(fill = "School Urbanicity", title = "Figure 1: Urbanicity") + scale_fill_brewer(palette = "Pastel1") + theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14, margin = margin(t = -15)), plot.margin = margin(t = -20, r = 10, b = 5, l = 10))
+
+pie_class <- ggplot(data = data_class, aes(x = "", y = num_classes, fill = label)) + geom_col(width = 1, color = "white") + coord_polar(theta = "y") + theme_void() + labs(fill = "Class Type", title = "Figure 2: Class Type") + scale_fill_brewer(palette = "Pastel1") + theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14, margin = margin(t = -15)), plot.margin = margin(t = -20, r = 2, b = 5, l = 2))
+
+pie_urbanicity + pie_class
+```
+
+## Noncompliance
+
+Despite the comprehensive experiment design, there are some flaws deserves attention:
+
+ - For sampling purpose, schools participated in STAR were slightly larger than the average schools in Tennessee, which may lead to departure of estimated causal effect from reality;
+ 
+ - The randomization was conducted and monitored by researchers at the school level; teachers were assigned randomly and no major change was made to the school policies. According to homoscedasticity assumptions, residuals of student math score in each group should have equal variances. This experiment should take into account of the teachers' and students' average ability across different schools, since in the initial analysis report, there is a obvious discrepancy between the average first grade math score across different levels of urbanicity where schools are located;
+
+```{r, echo=FALSE}
+prop_switch2regular <- sum(data_switcher$switcher %in% c("small_regular", "regular+aide_small")) / dim(data_switcher)[1]
+
+prop_switch2small <- sum(data_switcher$switcher %in% c("regular_small", "regular+aide_small")) / dim(data_switcher)[1]
+```
+
+
+ - Although assignment of students was at random when students entered kindergarten, nevertheless, the portion of students switched their class types at first grade deserves attention. In the later part of this report, we will see that, after discarding the subjects with missing value in their kindergarten and first grade class assignment record, about 3.8% of the student switched from small classes to regular or regular class with aide and about 5.4% of the students switched from a regular class or regular class with aide to a small class at first grade; researchers might overlooked the phenomenon, and this might lead to invalidity of randomization on the first grade class assignment. It was mentioned in the user's guide that about half of the R(regular class size) students were assigned randomly to RA(regular class size with aide) and half of the RA students were assigned to R randomly due to the purposeful experiment design for the second year, but no conduct was made on purpose to the small size class, which means students may switch their class type on purpose out of various reasons;
+
+# Initial Analysis
+
+## Missing Data Handling
+
+This dataset includes 11601 students from 79 schools across all areas of Tennessee. However, the proportion of missing values in this dataset is not negligible. While some missing values resulted from data collection issues (which could be addressed using data imputation methods), others were caused by non-technical reasons. For example, kindergarten was not mandatory in Tennessee, so some students who participated in this project had no records for their kindergarten year. There are no easy or reasonable ways to fill in this type of missing data, and we should not apply the same imputation methods as we did for the first type. In fact, distinguishing between these two types of missing values is itself quite challenging.
+
+Furthermore, due to time constraints, our main focus is not on handling missing data. Therefore, I simply dropped all samples with missing values in the variables of interest.
+
+## A Brief Recap of Previous Model
+
+In the initial analysis on the question of interest, our goal was to investigate the existence of **discrepancies between the students' mean scaled math score in first grade** and **which class type is associated with the highest math score** if there is any difference. We defined the following model to answer the previous questions:
+
+$$
+Y_{ijk} = \mu_{..} + \alpha_i + \beta_j + \epsilon_{ijk} 
+$$
+where:
+
+ - ${Y_{ijk}}$ is the ${k}$-th outcome of ${i}$-th level of `class size` and ${j}$-th level of `school ID`
+ 
+ - ${\mu}$ is the overall mean across all group
+ 
+ - ${\alpha_i}$ is the fixed effect of the ${i}$-th `class type`
+ 
+ - ${\beta_j}$ is the fixed effect of the ${j}$-th `school ID`
+ 
+ - ${\epsilon_{ijk}}$ is the ${k}$-th random error term of ${i}$-th of `class size` and ${j}$-th level of `school ID`
+ 
+## Caveats of Previous Model
+
+### Q1: Should We Treat School ID as Fixed Effect Factor?
+
+In the initial analysis, we briefly investigated the association between the `school ID` and student `mean math score in first Grade`. From the box-plot of student math score against school indicator, there are obvious differences across schools, as shown in the following figure:
+
+```{r, fig.align='center', echo=FALSE, warning=FALSE}
+df_boxplot_school <- data_analysis %>%
+  drop_na(g1tchid, g1surban, g1tmathss, g1schid)
+
+df_boxplot_school <- df_boxplot_school %>%
+  group_by(g1schid, g1surban) %>%
+  summarise(mean_score = mean(g1tmathss), 
+            lower_score = quantile(g1tmathss, 0.25), 
+            upper_score = quantile(g1tmathss, 0.75), 
+            .groups = "drop")
+
+df_boxplot_school <- df_boxplot_school %>%
+  mutate(g1schid = fct_reorder(as.factor(g1schid), as.numeric(g1surban)))
+
+df_boxplot_school$g1surban <- as_factor(df_boxplot_school$g1surban)
+
+ggplot(df_boxplot_school, aes(x = factor(g1schid), y = mean_score, color = g1surban)) + geom_segment(aes(x = g1schid, xend = g1schid, y = lower_score, yend = upper_score), size = 0.5) + geom_point(size = 1) + geom_text(aes(label = round(mean_score, 1)), vjust = -0.5, size = 2, color = "black")+ labs(title = "Figure 3: Boxplot of Scores vs School Indicator", x = "SCHOOL ID (Clustered by Urbanicity)", y = "MATH SCORE") + theme_minimal() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.title = element_text(hjust = 0.5))
+
+```
+
+The variation of student first grade math score suggested that we should include `School ID` in our model, but whether or not we should include it as a fixed effect model deserves further investigation. We should consider the following questions:
+
+ - Did researcher specify the levels of factors in the experiment design? 
+ 
+ - Are the levels of school indicators meaningful to our investigation on the question of interest?
+ 
+ - Do we want to compare between specific groups?
+ 
+The answers are obvious. By reviewing the user's guide provided by the researchers who designed this experiment, schools were selected from eligible candidates from all levels of urbanicity to span the whole Tennessee States; researched were concerned about the reduced class size effect across all areas in Tennessee State and the any specific school were not selected on purpose. As a subject randomly choosed from predetermined urbanicity level, it is more valid to treat it as **random effect factor**
+
+### Q2: Were Class Size and School ID Enough to Make Our Study Valid?
+
+From Figure 3, by clustering schools at the same level of urbanicity, the plot provided vague evidence for the effect of urbanicity on students score; if we further rank schools by student mean math score in first grade within each cluster, the uneven pattern is more obvious:
+
+```{r, echo = FALSE}
+df_boxplot_school_2 <- data_analysis %>%
+  drop_na(g1tchid, g1surban, g1tmathss, g1schid)
+
+df_boxplot_school_2 <- df_boxplot_school_2 %>%
+  group_by(g1schid, g1surban) %>%
+  summarise(
+    mean_score = mean(g1tmathss), 
+    lower_score = quantile(g1tmathss, 0.25), 
+    upper_score = quantile(g1tmathss, 0.75), 
+    .groups = "drop"
+  )
+
+df_boxplot_school_2 <- df_boxplot_school_2 %>%
+  arrange(g1surban, mean_score) %>%
+  group_by(g1surban) %>%
+  mutate(rank_within_group = row_number())
+
+df_boxplot_school_2 <- df_boxplot_school_2 %>%
+  mutate(ranked_label = factor(paste(g1surban, rank_within_group, sep = "-"), 
+                               levels = paste(g1surban, rank_within_group, sep = "-")))
+
+df_boxplot_school_2$g1surban <- as_factor(df_boxplot_school_2$g1surban)
+
+ggplot(df_boxplot_school_2, aes(x = ranked_label, y = mean_score, color = g1surban)) + geom_segment(aes(x = ranked_label, xend = ranked_label, y = lower_score, yend = upper_score), size = 0.5) + geom_point(size = 1.5) + labs(title = "Figure 4: Boxplot of Scores vs School Indicator", x = "School ID (Ranked within Urbanicity)", y = "Math Score") + theme_minimal() + theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), plot.title = element_text(hjust = 0.5))
+```
+
+Clearly, students from schools in the inner city location performed worse, while students' average performance from the other 3 levels of urbanicity were at similar level in general. To improve the accuracy of estimated effect and reduce the omitted variables bias, it is reasonable to include `Urbanicity` in our model. By the experiment design, specific levels of urbanicity was determined by consortium to study the class effect from schools in different area of urbanicity, then we should treat it as **fixed effect factor**.
+
+## Multivariate Summary Statistics
+
+### Effect of Class Size on Student Performance
+
+```{r, echo=FALSE, message=FALSE}
+# Main effect plot
+data_summary <- data_analysis %>%
+  group_by(g1classtype, g1schid) %>%
+  summarise(mean_score = mean(g1tmathss, na.rm = TRUE), .group = "drop")
+
+plotmeans(mean_score~g1classtype, data = data_summary, xlab = "Class size", ylab = "Mean score", xaxt = "n", main = "Figure 5: Main effect: class size")
+axis(1, at = 1:3, labels = c("Small", "Regular", "Reglar+aide"))
+```
+
+Main effect plot provided sufficient evidence for the discrepancies across different levels of class type, suggesting that class size might significantly affects students first grade math score. Among all class types, the students in the small class in first grade exhibited the highest performance with mean score about 539; teacher's aide did not play an deterministic role in the students' math score, since there is no significant difference between regular sized class with or without teachers' aide: both class types have mean score about 527. The variations of all 3 types of classes are quite similar. In summary, reduced class size has obvious positive effect on student score while teacher's aide is not deterministic: it has limited effect on student performance.
+
+### Effect of School ID on Student Performance
+
+By revisiting **Figure 3**, range of mean math score of different schools differs obviously.School ID `228606` has the highest average score around 570.7, while `244728` has the lowest average score around 489.4. It is worth mentioning again that, inner-city school students were more likely to underperform students from schools at other level of urbanicity, we should further investigate the relation between urbanicity and student performance.
+
+### Effect of Urbanicity on Student Performance
+
+```{r, echo=FALSE}
+df_boxplot_urban <- data_analysis %>%
+  drop_na(g1tchid, g1surban, g1tmathss, g1schid) %>%
+  select(-mean_score)
+
+df_urban <- df_boxplot_urban %>%
+  group_by(g1tchid) %>%
+  summarise(mean_score = mean(g1tmathss, na.rm = TRUE), .groups = "drop")
+
+df_boxplot_urban <- df_boxplot_urban %>%
+  left_join(df_urban %>% select(g1tchid, mean_score), by = "g1tchid")
+
+df_boxplot_urban$g1surban <- as_factor(df_boxplot_urban$g1surban)
+
+ggplot(data = df_boxplot_urban, aes(x = factor(g1surban), y = mean_score, fill = g1surban)) + geom_boxplot() + labs(title = "Figure 6: Boxplot of Mean Scores vs Urbanicity", x = "Urbanicity", y = "Mean Math Score", scale_fill_brewer(palette = "Set2")) + theme_minimal() + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+As expected, there is significant gap between the mean score of classes in inner city area compared with those at other levels of urbanicity; Classes with highest average score came from rural places; the best class has the highest average score over 600. This figure suggests that school urbanicity could be an important factor and should be included in our model.
+
+
+### Conclusion
+
+From the initial analysis, summary statistics and figures above, the following conclusions are made about the adjustments need to be taken on the model:
+
+ - `class size` should be remained in our model and treated as **fixed effect factor**;
+ 
+ - `school ID` should be remained in our model; however, instead of fixed effect model, we should treat it as **random effect factor**
+ 
+ - `urbanicity` displayed significant impact on the average score of each class, we should include it in our model; based on the experiment design, it should be treated as **fixed effect factor**
+ 
+ - No interaction terms will be included in our model
+
+# Final Model Settings
+
+$$
+Y_{ijk} = \mu + \alpha_i + \beta_j + \gamma_k + \epsilon_{ijkl}
+$$
+
+where:
+
+ - ${Y_{ijk}}$ is the ${l}$-th outcome of ${i}$-th level of `class size`, ${j}$-th level of `school ID` and ${k}$-th level of `urbanicity`;
+ 
+ - ${\mu}$ is the overall mean across possible levels of `class size`, `school ID` and `urbanicity`;
+ 
+ - ${\alpha_i}$ is the **fixed effect** of the ${i}$-th `class type`;
+ 
+ - ${\beta_j}$ is the **random effect** of the ${j}$-th `school ID`;
+ 
+ - ${\gamma_k}$ is the **fixed effect** of the ${k}$-th `urbanicity`
+ 
+ - ${\epsilon_{ijk}}$ is the ${l}$-th random error term of ${i}$-th of `class size`, ${j}$-th level of `school ID` and ${k}$-th level of `urbanicity`.
+ 
+## Assumptions and Constraints
+
+Since our final model is mixed effect model with `school ID` as random effect and `class size`, `urbanicity` as fixed effect, it should conform to the following assumptions/constraints:
+
+ - **Random effect** $\beta_j$ are i.i.d normally distributed with mean 0 and variance ${\sigma^2_{\beta}}$; ${\beta_j\sim N(0, \sigma^2_{\beta})}$ for all $j$;
+ 
+ - Error terms ${\epsilon_{ijkl}}$ are i.i.d. normally distributed with mean 0 and variance ${\sigma^2}$; ${\epsilon_{ijkl} \sim N(0, \sigma^2)}$ for all $i, j, k, l$;
+ 
+ - $\beta_j$, ${\gamma_k}$ and ${\epsilon_{ijkl}}$ are mutually independent;
+ 
+ - ${\sum \alpha_i = 0}$
+
+# Justification for No Interation Terms Included
+
+In our final model, we include no interaction terms mainly based for the following reasons:
+
+**Initial analysis result** In initial analysis report, interaction plots and hypothesis testing were applied to test for the potential existence of interaction effect; the interaction plot displayed no severe deviation from the parallel parallel pattern that we expected, which implies no strong clue for interaction effect; to further confirm that we should not include interaction terms, hypothesis testing was performed and the result indicates that p-value was not in rejection zone and therefore we decide no interaction terms should be included.
+
+**No strong evidence for interaction effect in final model** We can further briefly check existence of the interaction terms in the final model:
+
+```{r, echo=FALSE}
+df_mean_1 <- data_analysis %>%
+  drop_na(g1classtype, g1surban, g1tmathss) %>%
+  group_by(g1classtype, g1surban) %>%
+  summarise(mean_score = mean(g1tmathss, na.rm=TRUE), .groups = "drop")
+
+custom_labels <- c("S", "R", "RA") 
+df_mean_1$g1classtype <- factor(df_mean_1$g1classtype, levels = c(1, 2, 3), labels = custom_labels)
+```
+
+<details>
+  <summary>Click to Expand/Collapse Interaction Plot</summary>
+  
+```{r, echo=FALSE, fig.width=6, fig.height=4}
+
+  interaction.plot(
+    x.factor = df_mean_1$g1surban, 
+    trace.factor = df_mean_1$g1classtype, 
+    response = df_mean_1$mean_score, 
+    type = "b", 
+    col = c("blue", "red", "green"), 
+    pch = c(16, 17, 18), 
+    xlab = "School Location", 
+    ylab = "Mean Scaled Math Grade", 
+    trace.label = "Class Type",
+    xaxt = "n",
+    legend = FALSE
+  )
+legend("topright", legend = levels(df_mean_1$g1classtype), col = c("blue", "red", "green"), lty = 1, cex = 0.7)
+axis(1, at = 1:4, labels = c("INNER CITY", "SUBURBAN", "RURAL", "URBAN"))
+```
+</details>
+
+The general trends of mean math score of 3 class types are similar in interaction plot; students from schools in inner city has the lowest average score, while in suburban, rural or urban schools, the average scores are at similar level; students' achievement in regular class and regular class with aide are at same levels, while the gap between small class students and regular class students with/without aide are close across different levels of urbanicity. The interaction plots does not support strong interaction effect based on the result.
+
+
+<details>
+  <summary>Click to Expand/Collapse Random Effects Dot Plot</summary>
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+  model_rs <- lmer(g1tmathss ~ g1classtype + g1surban + (g1surban | g1schid), data = data_analysis)
+  sink(tempfile())
+  print(dotplot(ranef(model_rs, condVar = TRUE), scales = list(y = list(draw = FALSE))))
+  sink()
+
+```
+
+</details>
+
+The random effect dot plot shows that there are significant differences between different schools, which indicates the necessity of adding `school id` as random effect factor into our final model; there are no significant variances between the estimated random slope, it further supports the claim that we do not need to include interaction terms into our final model.
+
+
+## Selection Bias
+
+Before fitting the model and commenting on the result, let's first focus on the "switching" behavior observed in the second year. 
+
+```{r, echo=FALSE}
+data_stacked_bar <- data_analysis
+data_stacked_bar <- data_stacked_bar %>%
+  drop_na(gkclasstype, g1classtype)
+
+data_sb <- data.frame(
+  k_class = as.factor(data_stacked_bar$gkclasstype),
+  f_class = as.factor(data_stacked_bar$g1classtype)
+)
+data_sb_summary <- data_sb %>%
+  pivot_longer(cols = c(k_class, f_class), names_to = "Variable", values_to = "Category") %>%
+  group_by(Variable, Category) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  mutate(Proportion = count / sum(count))
+legend_labels <- c("1" = "Small", "2" = "Regular", "3" = "Regular+aide")
+legend_colors <- c("1" = "#1f77b4", "2" = "#ff7f0e", "3" = "#2ca02c")
+
+
+
+ggplot(data_sb_summary, aes(x = Variable, y = count, fill = Category)) +geom_bar(stat = "identity", color = "white", width = 0.4) + geom_text(aes(label = count), position = position_stack(vjust = 0.5), size = 4, color = "black") + scale_x_discrete(labels = c("k_class" = "K Class Type", "f_class" = "F Class Type")) +  labs(title = "Proportional Comparison of Two Years Class Assignment", x = "Class Types", y = "Proportion", fill = "Class Type") + scale_fill_manual(values = legend_colors, labels = legend_labels) + theme_minimal()
+
+
+```
+
+Among students participated in th project for both kindergarten and first year, students were shifted between class types: number of students in small class was increased by 139; as mentioned in the user guide, there was a positive effect of reduced class size on the student performance. Therefore, we are interested in the following question: **among all students in regular classes, did students who switched to small classes outperformed or underperformed the other students?**
+
+```{r, echo=FALSE}
+data_K_regular <-  data_switcher %>%
+  select(gktmathss, gkclasstype, g1classtype) %>%
+  drop_na(gktmathss, gkclasstype, g1classtype) %>%
+  filter(gkclasstype %in% c(2, 3))
+
+
+data_K_regular <- data_K_regular %>%
+  mutate(switched_to_small = case_when(
+    g1classtype == 1~1,
+    TRUE~0
+  ))
+
+data_K_regular$switched_to_small <- factor(
+  data_K_regular$switched_to_small,
+  levels = c(0, 1),
+  labels = c("Stayed", "Switched to Small")
+)
+
+dist_plot <- ggplot(data_K_regular, aes(x = gktmathss, color = switched_to_small, fill = switched_to_small)) +
+  geom_density(
+    alpha = 0.3,
+    linewidth = 0.8
+  ) +
+  scale_color_manual(values = c("Stayed" = "#1f77b4", "Switched to Small" = "#ff7f0e")) +
+  scale_fill_manual(values = c("Stayed" = "#1f77b4", "Switched to Small" = "#ff7f0e")) +
+  labs(
+    title = "Distribution Comparison Between Two Groups",
+    x = "Value",
+    y = "Density",
+    color = "Group",
+    fill = "Group"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "top"
+  )
+dist_plot
+```
+
+Although the variation and range are very close, students who switched to small classes from regular class or regular class with aide had worse performance on kindergarten year math score on average. This phenomenon might lead to a **underestimate of reduced-size class effect**.
+
+## Apply PSM to Reduce Effect of Selection Bias
+
+In the previous part of this report, we found that there are covariates like kindergarten math score could affect the assignment of treatment(assignment to small classes in first grade), and we want to apply methods to match subjects in the treatment group and control groups to control the selection bias, such that there are no systematic differences between units in 2 groups, and estimation of casual effect is more reliable. This is where Propensity Score Matching comes in handy, as it estimated the probability of each student getting assigned to small classes in the first grade, and match samples in the treatment group with samples in the control, such that units in the two groups are comparable.
+
+We first need to decide the potential candidate for covariate that predicts the assignment of treatment. According to the initial analysis, about 61% of student did not switch their class type in first grade, therefore, `gkclasstype`(kindergarten year class type) will be considered as an important covariate and should be added into the PSM model; There were also significant difference between the mean math score in kindergarten year and we should also include `gktmathss`(kindergarten year math score) in the final propensity score estimation model;in addition to that, LASSO can be helpful, every meaningful variables that can be observed before the actual assignment will be added into the LASSO model for model selection.
+
+
+```{r, echo = FALSE}
+data_LASSO <- data_switcher %>%
+  select(g1classtype, gender, race, gksurban, gkclasstype, gktyears, gktreadss, gktmathss, g1surban, g1tyears) %>%
+  drop_na(g1classtype, gender, race, gksurban, gkclasstype, gktyears, gktreadss, gktmathss, g1surban, g1tyears) %>%
+  mutate(treatment = case_when(
+    g1classtype == 1~1,
+    TRUE~0
+  ))
+
+X <- model.matrix(~gksurban+gkclasstype+gktreadss+gktmathss+g1surban, data = data_LASSO)[,-1]
+Y <- data_LASSO$treatment
+
+X_scaled <- scale(X)
+
+lasso_model <- glmnet(X_scaled, Y, alpha = 1)
+cv_lasso <- cv.glmnet(X_scaled, Y, alpha = 1)
+
+best_lambda <- cv_lasso$lambda.min
+# print(best_lambda)
+
+#plot(cv_lasso)
+
+lasso_final <- glmnet(X_scaled, Y, alpha = 1, lambda = best_lambda)
+
+coefficent_LASSO<- coef(lasso_final)
+selected_vars <- rownames(coefficent_LASSO)[which(coefficent_LASSO != 0)][-1] 
+#print(selected_vars). # result: [1] "gksurban"    "gkclasstype" "gktreadss"  
+```
+
+
+Variables selected by LASSO are: `gksurban`(kindergarten school urbanicity), `gkclasstype`(kindergarten class type) and `gktreadss`(kindergarten reading score). Based on the selected result together with the initial analysis, we decide to choose the following model to estimate the propensity score:
+
+```{r, echo=FALSE}
+PSM_Estimate <- data_switcher %>%
+  select(stdntid, race, g1tmathss, g1classtype, gkclasstype, switcher, gktmathss, gksurban, gktyears, gktreadss) %>%
+  na.omit()
+
+PSM_Estimate <- PSM_Estimate %>%
+  mutate(
+    race = as.factor(race),
+    gkclasstype = as.factor(gkclasstype),
+    switcher = as.factor(switcher),
+    gksurban = as.factor(gksurban),)
+
+PSM_Estimate <- PSM_Estimate %>%
+  mutate(
+    assigned_to_small = ifelse(g1classtype == 1, 1, 0),
+    switched_to_small = ifelse((gkclasstype != 1) & g1classtype == 1, 1, 0))
+
+PSM_Estimate <- PSM_Estimate %>%
+  mutate(
+    gktmathss = scale(gktmathss),
+    gktyears = scale(gktyears))
+
+PSM_model <- glm(assigned_to_small~gkclasstype+gktmathss+gksurban+gktreadss, data=PSM_Estimate, family=binomial())
+PSM_Estimate$estimated_probability <- predict(PSM_model, type = "response")
+```
+
+```{r, echo = FALSE}
+# Use PSM to match students with similar probability of getting assigned into small class in 1st grade.
+match_model <- matchit(assigned_to_small~gktmathss+factor(gksurban)+factor(gkclasstype)+gktreadss, data=PSM_Estimate, method="nearest", distance = "glm", caliper = 0.1, std.caliper = TRUE)
+matched_data <- match.data(match_model)
+```
+
+```{r, echo = FALSE}
+plot(match_model, type = "hist")
+```
+
+```{r, echo=FALSE}
+love.plot(match_model,  stats = "mean.diffs", abs = TRUE, stars= "std", threshold = 0.1)
+```
+
+Based on the histogram above, before matching, the distribution of propensity score between treatment group and control group is extremely different from each other; after matching, the distribution of propensity score appears much more balanced; the uneven distribution of propensity score is also justified by the love plot: the absolute mean of differences of propensity score is very significant before adjustment, so are the kindergarten reading score`gktreadss` and math score`gktmathss`, while the differences are significantly reduced by PSM and we can proceed to the analysis of casual effects.
+
+```{r, echo=FALSE}
+PSM_stdntid <- matched_data$stdntid
+PSM_final_data <- data_analysis[data_analysis$stdntid %in% PSM_stdntid, ]
+```
+
+```{r, echo=FALSE}
+lm1 <- lmer(mean_score~as.factor(g1classtype)+as.factor(g1surban)+(1|g1schid), data=PSM_final_data)
+# summary(lm1)
+```
+
+
+## Remarks on PSM and An Alternative: DNN-PSM
+
+Although the histogram of propensity score in the treatment group and control group implied that we have significantly reduced the differences of covariates, there were potential problems:
+
+ - Even after matching, there are still SMD in `gktmathss` and `gktreadss` that were not negligible'
+
+ - in the classical PSM model, we implicitly assumes linear association between the log-odds of treatment assignment and covariates;
+ 
+Therefore, we should consider applying models that allows for nonlinear relation between propensity score and covariates; this is why I decide to apply Deep Neural Network**(DNN)** to estimate propensity score. After the estimated propensity scores were derived, we will use it to match samples in treatment group with samples in control group
+ 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+data_DNN <- data_switcher %>%
+  drop_na(gkclasstype, g1surban, gktmathss, gktreadss) %>%
+  mutate(treatment = case_when(
+    g1classtype == 1~1,
+    TRUE~0
+  ))  
+
+X_DNN <- data_DNN %>%
+  select(gkclasstype, g1surban, gktmathss, gktreadss)
+
+X_DNN_scaled <- scale(X_DNN)
+Y_DNN <- data_DNN$treatment
+
+DL_model <- keras_model_sequential(name = "prob_estimation_model") %>%
+  layer_dense(units = 128, activation = "relu", input_shape = ncol(X_DNN_scaled)) %>%
+  layer_dense(units = 128, activation = "relu") %>%
+#  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+
+DL_model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_adam(learning_rate = 0.001),
+  metrics = "accuracy"
+)
+
+history <- DL_model %>% fit(
+  X_DNN_scaled, Y_DNN,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2,
+  verbose = 0,
+#  callbacks = list(keras::callback_early_stopping(patience = 5))
+)
+
+data_DNN$estimated_probability <- DL_model %>% predict(X_DNN_scaled, verbose = 0) %>% as.numeric()
+# head(data_DNN$estimated_probability, 10)
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# check the ROC curve:
+DNN_ROC_curve <- roc(response = data_DNN$treatment, predictor = as.numeric(data_DNN$estimated_probability))
+DNN_AUC_result <- auc(DNN_ROC_curve)
+#print(DNN_AUC_result)
+# Area under the curve: 0.9382
+```
+
+```{r, echo=FALSE}
+DNN_match <- matchit(treatment~factor(gkclasstype)+factor(g1surban)+gktmathss+gktreadss, data = data_DNN, method = "nearest", distance = data_DNN$estimated_probability, replace = FALSE, caliper = 0.1, std.caliper = TRUE)
+DNN_matched_data <- match.data(DNN_match)
+```
+
+```{r, echo=FALSE}
+par(mfrow = c(2, 1))
+plot(DNN_match, type = "hist")
+love.plot(DNN_match,  stats = "mean.diffs", abs = TRUE, stars= "std", threshold = 0.1)
+```
+
+From the love plot above, SMDs of covariates are further reduced by applying DNN estimated propensity score, with only `gktreadss`(kindergarten reading score) above threshold 0.1 after adjustment, but is very close. This indicates a better balance between the samples in treatment group and control group while not signifanctly reduced the number of samples in the dataset after matching.
+
+```{r, echo=FALSE}
+DNN_stdntid <- DNN_matched_data$stdntid
+DNN_final_data <- data_analysis[data_analysis$stdntid %in% DNN_stdntid, ]
+```
+
+
+```{r, echo=FALSE}
+lm2 <- lmer(mean_score~as.factor(g1classtype)+as.factor(g1surban)+(1|g1schid), data=DNN_final_data)
+# summary(lm2)
+```
+
+## Casual Effect of Final Model and Comparison Between Two Methods
+
+| Variables | Estimate(PSM) | Std.Error(PSM) | t-value(PSM) | Estimate(DNN)| Std.Error(DNN) | t-value(DNN) |
+|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|:----------:|
+|Intercept | 520.344 | 4.867 | 106.904 | 520.220 | 4.756 | 109.392 |
+| R | -15.623 | 1.529 | -10.217 | -14.321 | 1.548 | -9.253 |
+| RA| -12.029 | 1.601 | -7.513 | -11.871 | 1.588 | -7.475 |
+| Suburban | 25.486 | 6.658 | 3.828 | 24.300 | 6.447 | 3.769 |
+| Rural | 27.055 | 5.801 | 4.664 | 25.952 | 5.597 | 4.637 |
+| Urban | 23.410 | 8.711 | 2.687 | 20.926 | 8.455 | 2.475 |
+
+The **intercept** term indicates the average math score of students assigned to a **small class** in a **Inner-City school**,which serves as reference class in our following discussion,  in first grade is **520.344** or (**520.220** from the result of DNN method)；
+
+The estimated coefficients for `class type` is the **fixed effect** of **class size** on the mean math score of students in first grade; it implies that, compared with reference class, the average mean math score is reduced by 15.623/14.321 for students assigned to **regular class** or 12.029/11.871 for students assigned to **regular class with aide** due to the lack of small class size effect; it is a strong evidence supporting the existence of positive effect of reduced class size on the students' math score and students in the small class tends to achieve the highest average score in first grade;
+
+The estimated coefficients for `urbanicity` is the **fixed effect** of **urbanicity** of school location on the mean math score in the first grade. The result of estimatd coefficients indicates that students enrolled in a non-inner-city school tend to receive a math grade higher than students in inner-city school by about 25 in average, as long as they were assigned to the same type of schools. This shows that different levels of urbanicity have significant effect on students' math score.
+
+Although the estimated coefficients from 2 different matching methods are very close, according to the love plot and histogram of propensity score distribution, DNN outperformed classical PSM method on mathcing samples since it achieves better balance on covariates of samples in treatment and control groups, therefore, the estimated result would be a more precise estimation for the causal effect of reduced class size.
+
+# Answer to Question of Interest
+
+## Q1: Does There Exist Difference Across Different Class Type?
+
+First, we applied tukey-kramer's method to build the 95% confidence intervals simultaneously with both data generated by classical PSM and DNN-PSM:
+
+```{r, echo=FALSE}
+emm_1 <- emmeans(lm1, specs = ~ as.factor(g1classtype))
+tukey_result_1 <- contrast(emm_1, method = "pairwise", adjust = "tukey")
+#summary(tukey_result_1)
+```
+
+```{r, echo=FALSE}
+# generate upper and lower bound of CI and estimation of coefficients:
+CI_PSM <- data.frame(
+  pairwise_names = c("small - regular", "small - regular+aide", "regular - regular+aide"),
+  estimated_means = c(15.62, 12.03, -3.59), 
+  CI_lower = c(15.62 - 1.96*1.53, 12.03 - 1.96 * 1.60, -3.59 - 1.96*1.65),
+  CI_upper = c(15.62 + 1.96*1.53, 12.03 + 1.96 * 1.60, -3.59 + 1.96*1.65)
+  )
+
+# plot the confidence interval for each pairwise difference:
+ggplot(CI_PSM, aes(x = estimated_means, y = pairwise_names)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    height = 0.2,
+    color = "black",
+    size = 1
+  ) +
+  geom_point(
+    size = 3,
+    color = "blue"
+  ) +
+  labs(
+    x = "Estimated Difference in Math Scores",
+    y = "Pairwise Comparisons",
+    title = "PSM: Pairwise Differences Between Class Types",
+    subtitle = "With 95% Confidence Intervals"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+```{r, echo=FALSE}
+emm_2 <- emmeans(lm2, specs = ~ as.factor(g1classtype))
+tukey_result_2 <- contrast(emm_2, method = "pairwise", adjust = "tukey")
+# summary(tukey_result_2)
+```
+
+```{r, echo=FALSE}
+# generate upper and lower bound of CI and estimation of coefficients:
+CI_DNN <- data.frame(
+  pairwise_names = c("small - regular", "small - regular+aide", "regular - regular+aide"),
+  estimated_means = c(14.32, 11.87, -2.45), 
+  CI_lower = c(14.32 - 1.96*1.55, 11.87 - 1.96 * 1.59, -2.45 - 1.96*1.71),
+  CI_upper = c(14.32 + 1.96*1.55, 11.87 + 1.96 * 1.59, -2.45 + 1.96*1.71)
+  )
+
+# plot the confidence interval for each pairwise difference:
+ggplot(CI_DNN, aes(x = estimated_means, y = pairwise_names)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50") +
+  geom_errorbarh(
+    aes(xmin = CI_lower, xmax = CI_upper),
+    height = 0.2,
+    color = "black",
+    size = 1
+  ) +
+  geom_point(
+    size = 3,
+    color = "blue"
+  ) +
+  labs(
+    x = "Estimated Difference in Math Scores",
+    y = "Pairwise Comparisons",
+    title = "DNN: Pairwise Differences Between Class Types",
+    subtitle = "With 95% Confidence Intervals"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5)
+  )
+```
+
+Both **Estimated Marginal Means**(EMM) suggested the following conclusions: The positive differences between **S-R**(small minus regular) and **S-RA**(small minus regular with aide) are significantly difference from 0, and the confidence interval of **R-RA** contained 0 if we use DNN-PSM data; with the previous conclusion, we can answer the first question: there was statistically significant differences between the pairwise differences of **S-R** and **S-RA**, therefore, **there exist significant differences across different levels of class type**.
+
+## Q2: Which Class Type Is Associated With The Highest Mean Score?
+
+Based on the results in Q1 part, we have the following observations:
+
+ - The differences between group means of small vs regular and small vs regular with aide are both **positive** with very extreme p-value(<0.0001);
+ 
+ - the differences between group mean of regular vs regular with aide is not statistically significant.
+
+Combining the previous observations, we come up with the following conclusion: **students in small classes have the highest mean math score**.
+
+# Sensitivity Analysis
+
+```{r, echo=FALSE}
+# check the residual vs fitted value plot:
+
+rf_plot_1 <- ggplot(data = NULL, aes(x = fitted(lm1), y = resid(lm1))) + geom_point(color = "black", alpha = 0.5) + geom_hline(yintercept = 0, color = "red", linetype = "dashed") + labs(x = "Fitted Values", y = "Residuals", title = "PSM: Residuals vs Fitted Values") + theme_minimal() + theme(element_text(hjust = 0.5))
+
+rf_plot_2 <- ggplot(data = NULL, aes(x = fitted(lm2), y = resid(lm2))) + geom_point(color = "black", alpha = 0.5) + geom_hline(yintercept = 0, color = "red", linetype = "dashed") + labs(x = "Fitted Values", y = "Residuals", title = "DNN: Residuals vs Fitted Values") + theme_minimal() + theme(element_text(hjust = 0.5))
+
+rf_plot_1 + rf_plot_2
+```
+
+There were no obvious deviation from homoscedasticity assumption since the residuals were evenly distribution around 0; this suggested that validity of our estimation of causal effect was not reduced by violation of homoscedasticity assumption.
+
+```{r, echo=FALSE}
+qq_plot_1 <- qqnorm(resid(lm1), main = "PSM: QQ plot")
+qqline(resid(lm1), col = "red")
+
+qq_plot_2 <- qqnorm(resid(lm2), main = "DNN: QQ plot")
+qqline(resid(lm2), col = "red")
+```
+
+Residuals derived by fitting model on both dataset displayed **moderate deviation from normality**: there existed heavy-tail pattern, as several outliers appears far away from the theoretical quantiles. However, if we take into account of the number of samples against number of outliers, the effect of slight violation of normality assumption did not have very significant impact on the validity of our model.
+
+# Discussion
+
+To investigate the association between student first grade math score and assignment of class type in a more valid way, our initial analysis on the dataset revealed the existence of potential selection bias by analyzing the reassignment of class type in first grade. Propensity score matching were applied to reduce the selection bias; two ways of propensity estimation were applied (logistic regression and deep neural network) and the covariate distribution of treatment group and control group were balanced. After data matching, our investigation on the causal effect implies significant positive effect of reduced class size compared with regular class size, no matter whether there is teacher's aide. Urbanicity was proved to be another factor that had non-trivial impact on the student math score. These finding provide inspirations to policymakers or educators who wished to take advantages of factors that can boost student's performance and achievement.
+
+Further research exploring how small class size improves student achievement from other perspectives would be valuable. Conducting a more comprehensive analysis of the causal effect of reduced class size and fully leveraging the benefits of small classes would provide valuable insights for educators to enhance the efficiency of education systems.
+
+Since our study focused only on the earliest grade, the extent to which reduced class size affects student performance in higher grades requires further experimentation and investigation. However, this is beyond the scope of this dataset due to the experimental design, as students were no longer assigned to small classes after third grade.
+
+# Acknowledgement
+
+1. Discussed with Prof. Chen and TA Yanhao Jin about the details on the design of this report;
+
+2. Used Chatgpt to fix grammar mistakes;
+
+3. Github link: https://github.com/lizc0816/STA_207_Final_Report
+
+# Reference
+
+1. Seungman, K. Jaehoon, L. Kwanhee, J.(2023). Propensity Score Estimation Using Neural Networks: A Comparison of DNN, CNN, and Logistic Regression, DOI: https://doi.org/10.21203/rs.3.rs-3376578/v1
+
+2. Peter, C. A. (2013). A comparison of 12 algorithms for matching on the propensity score, Statistics in Medicine, 33(6), 901-1080. https://doi.org/10.1002/sim.6004
+
+3. Paul, R. R. & Donald, B. R. (1983). The central role of the propensity score in observational studies for causal effects, Biometrika, 70(1), 41–55. https://doi.org/10.1093/biomet/70.1.41
+
+# Session Info
+
+```{r}
+sessionInfo()
+```
+
